@@ -1,2 +1,2 @@
 # live-script-editor
-maya like script editor
+Maya-like Python script editor

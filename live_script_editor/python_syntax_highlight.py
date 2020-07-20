@@ -4,6 +4,22 @@
 from Qt.QtCore import QRegExp
 from Qt.QtGui import QColor, QTextCharFormat, QFont, QSyntaxHighlighter
 
+highlight_debug_str = """import sys
+print(sys.executable)
+
+
+
+"heyo, some text"
+'''other sub text'''
+# comment
+123 + 123.34
+class Testing():
+    def __init__(self):
+        self.something = 123
+
+def test_func(arg):
+    print(arg)
+"""
 
 def format(color, style=''):
     """Return a QTextCharFormat with the given attributes.

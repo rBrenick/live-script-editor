@@ -6,9 +6,9 @@ from typing import Callable
 
 from Qt import QtCore, QtWidgets, QtGui
 
-key_list = QtCore.Qt
-
 from live_script_editor import python_syntax_highlight
+
+key_list = QtCore.Qt
 
 tool_qt_stylesheet = ""
 stylesheet_path = os.path.join(os.path.dirname(__file__), "stylesheets", "darkblue.stylesheet")
@@ -81,11 +81,18 @@ class PythonObjectCompleter(QtWidgets.QCompleter):
         return self.last_selected
 
     def complete_text(self, text):
-        selected_obj_full_name = text.split(" ")[-1]
+        """
+        Analyse a string and get the dir() of the python object (so we can fill autocomplete list)
+
+        :param text:
+        :return:
+        """
+        selected_obj_full_name = text.split(" ")[-1].split("(")[-1]  # TODO: replace this with regex or something
         dot_split = selected_obj_full_name.split(".")
 
-        selected_obj_base = dot_split[0]  # globals only has root imports
-        selected_obj = globals().get(selected_obj_base)
+        selected_obj_base = dot_split[0]  # get first part before the .
+
+        selected_obj = globals().get(selected_obj_base)  # get python obj from globals()
 
         if selected_obj:
             if selected_obj_full_name.endswith("."):
@@ -147,6 +154,10 @@ class PythonScriptTextEdit(QtWidgets.QPlainTextEdit):
             ):
                 self.completer.popup().hide()
 
+        if key_event == key_list.Key_Tab:
+            tc.insertText("    ")
+            return
+
         super(PythonScriptTextEdit, self).keyPressEvent(event)
 
         if popup_visible:
@@ -187,60 +198,37 @@ class LiveScriptEditorWindowUI(QtWidgets.QWidget):
 
         self.script_output = ScriptConsoleOutputUI(self)
         self.script_output.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
-        self.main_layout.addWidget(self.script_output)
 
-        self.script_tab_widget = QtWidgets.QTabWidget()
-        # self.script_tab_widget.setTabsClosable(True)
-        self.main_layout.addWidget(self.script_tab_widget)
-
-        self.add_script_tab()
-
-        self.setLayout(self.main_layout)
-        self.main_layout.setStretch(0, 30)
-        self.main_layout.setStretch(1, 50)
-
-    def add_script_tab(self, tab_name="Python"):
-        script_text_edit = PythonScriptTextEdit()
-        script_text_edit.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
-        script_text_edit.setWordWrapMode(QtGui.QTextOption.NoWrap)
-        test_str = """import sys
-print(sys.executable)
-
-"heyo, some text"
-'''other sub text'''
-# comment
-123 + 123.34
-class Testing():
-    def __init__(self):
-        self.something = 123
-
-def test_func(arg):
-    print(arg)
-"""
-
-        script_text_edit.setPlainText(test_str)
-
-        python_syntax_highlight.PythonHighlighter(script_text_edit.document())
-
-        self.script_tab_widget.addTab(script_text_edit, tab_name)
-        self.script_tab_widget.setCurrentIndex(self.script_tab_widget.count() - 1)
+        self.script_output_dock = QtWidgets.QDockWidget()
+        self.script_output_dock.setWindowTitle("Output")
+        self.script_output_dock.setWidget(self.script_output)
 
 
 class LiveScriptEditorWindow(QtWidgets.QMainWindow):
     def __init__(self, parent=None):
         super(LiveScriptEditorWindow, self).__init__(parent)
         self.setWindowTitle("Live Script Editor")
-        self.setWindowIcon(QtGui.QIcon(os.path.join(os.path.dirname(__file__), "icons", "argument_dialog_icon.png")))
-
+        self.setWindowIcon(QtGui.QIcon(os.path.join(os.path.dirname(__file__), "icons", "live_script_editor_icon.png")))
         self.setStyleSheet(tool_qt_stylesheet)
 
+        self.script_docks = []
+
         self.ui = LiveScriptEditorWindowUI(self)
-        self.setCentralWidget(self.ui)
+        self.reset_layout()
+
+        self.setTabPosition(QtCore.Qt.BottomDockWidgetArea, QtWidgets.QTabWidget.TabPosition.North)
+        self.setTabPosition(QtCore.Qt.TopDockWidgetArea, QtWidgets.QTabWidget.TabPosition.North)
+        self.setTabPosition(QtCore.Qt.LeftDockWidgetArea, QtWidgets.QTabWidget.TabPosition.North)
+        self.setTabPosition(QtCore.Qt.RightDockWidgetArea, QtWidgets.QTabWidget.TabPosition.North)
+
         self.resize(700, 500)
+
+        # self.add_script_tab(file_path=__file__)
+        self.add_script_tab()
 
         file_menu = self.menuBar().addMenu("File")
         file_menu.setTearOffEnabled(True)
-        file_menu.addAction("New Tab", self.ui.add_script_tab, QtGui.QKeySequence("CTRL+N"))
+        file_menu.addAction("New Tab", self.add_script_tab, QtGui.QKeySequence("CTRL+N"))
         file_menu.addAction("Close Tab", self.close_current_tab, QtGui.QKeySequence("CTRL+W"))
         file_menu.addSeparator()
         file_menu.addAction("Run Script", self.run_script, QtGui.QKeySequence("CTRL+RETURN"))
@@ -248,15 +236,69 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
         edit_menu = self.menuBar().addMenu("Edit")
         edit_menu.setTearOffEnabled(True)
         edit_menu.addAction("Clear History", self.ui.script_output.clear, QtGui.QKeySequence("CTRL+SHIFT+D"))
+        edit_menu.addAction("Reset Layout", self.reset_layout, QtGui.QKeySequence("F5"))
 
         # class properties
         self.interp = code.InteractiveInterpreter(globals())
 
+    def reset_layout(self):
+        self.addDockWidget(QtCore.Qt.TopDockWidgetArea, self.ui.script_output_dock)
+
+    def add_script_tab(self, file_path=None):
+
+        # custom QT widget for ScriptEditing
+        script_text_edit = PythonScriptTextEdit()
+        script_text_edit.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
+        script_text_edit.setWordWrapMode(QtGui.QTextOption.NoWrap)
+
+        # syntax highlight
+        python_syntax_highlight.PythonHighlighter(script_text_edit.document())
+
+        # Dock Widget for ScriptTab
+        script_tabs_dock = QtWidgets.QDockWidget()
+        script_tabs_dock.setWidget(script_text_edit)
+
+        # if file input, add file content to text edit
+        if file_path and os.path.isfile(file_path):
+            script_tabs_dock.setWindowTitle(os.path.basename(file_path))
+            with open(file_path, "r") as fp:
+                script_text = fp.read()
+        else:
+            script_tabs_dock.setWindowTitle("Python")
+            # script_text = python_syntax_highlight.highlight_debug_str
+            script_text = ""
+
+        script_text_edit.setPlainText(script_text)
+
+        # dock to existing script tab, or make new at the bottom
+        if self.script_docks:
+            self.tabifyDockWidget(self.script_docks[-1], script_tabs_dock)
+        else:
+            self.addDockWidget(QtCore.Qt.BottomDockWidgetArea, script_tabs_dock)
+
+        # show new tab and set focus to ti
+        script_tabs_dock.show()
+        script_tabs_dock.raise_()
+        script_text_edit.setFocus(QtCore.Qt.FocusReason.ActiveWindowFocusReason)
+        self.script_docks.append(script_tabs_dock)
+
     def get_active_script_text_edit(self):
-        return self.ui.script_tab_widget.currentWidget()
+        for dock in self.script_docks:  # type: QtWidgets.QDockWidget
+            if dock.widget().hasFocus():
+                return dock.widget()
+        return self.script_docks[-1].widget()  # nothing has focus, return last created
 
     def close_current_tab(self):
-        self.ui.script_tab_widget.removeTab(self.ui.script_tab_widget.currentIndex())
+        docks_in_focus = []
+        for dock in self.script_docks:  # type: QtWidgets.QDockWidget
+            if dock.widget().hasFocus():
+                docks_in_focus.append(dock)
+                self.script_docks.remove(dock)
+
+        [d.close() for d in docks_in_focus]
+
+        if len(self.script_docks):
+            self.script_docks[-1].widget().setFocus(QtCore.Qt.FocusReason.ActiveWindowFocusReason)
 
     def run_script(self):
         active_script = self.get_active_script_text_edit()  # type: PythonScriptTextEdit
