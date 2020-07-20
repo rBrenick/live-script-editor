@@ -362,6 +362,54 @@ class PythonScriptTextEdit(QtWidgets.QPlainTextEdit):
             self.completer.complete(cr)
 
 
+class ScriptTree(QtWidgets.QWidget):
+    file_path_double_clicked = QtCore.Signal(str)
+
+    def __init__(self, parent=None):
+        super(ScriptTree, self).__init__(parent)
+        main_layout = QtWidgets.QVBoxLayout()
+
+        self.file_model = QtWidgets.QFileSystemModel()
+
+        folder_path_layout = QtWidgets.QHBoxLayout()
+        self.folder_path_line_edit = QtWidgets.QLineEdit()
+        folder_path_layout.addWidget(self.folder_path_line_edit)
+
+        self.folder_path_browse_button = QtWidgets.QPushButton("...")
+        self.folder_path_browse_button.clicked.connect(self.browse_folder_path)
+        folder_path_layout.addWidget(self.folder_path_browse_button)
+        main_layout.addLayout(folder_path_layout)
+
+        self.tree_view = QtWidgets.QTreeView()
+        self.tree_view.setModel(self.file_model)
+        self.tree_view.setHeaderHidden(True)
+        for i in range(1, self.tree_view.model().columnCount()):
+            self.tree_view.header().hideSection(i)
+        main_layout.addWidget(self.tree_view)
+
+        self.set_folder_path(os.path.dirname(__file__))
+
+        self.tree_view.doubleClicked.connect(self._path_double_clicked)
+
+        self.setLayout(main_layout)
+
+    def set_folder_path(self, folder_path):
+        self.folder_path_line_edit.setText(folder_path)
+        self.file_model.setRootPath(folder_path)
+        self.tree_view.setRootIndex(self.file_model.index(folder_path))
+
+    def browse_folder_path(self):
+        p = QtWidgets.QFileDialog.getExistingDirectory(self, "Get Script Folder")
+        if p:
+            self.set_folder_path(p)
+
+    def _path_double_clicked(self, index):
+        self.file_path_double_clicked.emit(self.get_file_path_from_index(index))
+
+    def get_file_path_from_index(self, index):
+        return self.file_model.filePath(index).replace("\\", "/")
+
+
 class LiveScriptEditorWindowUI(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super(LiveScriptEditorWindowUI, self).__init__(parent)
@@ -375,6 +423,13 @@ class LiveScriptEditorWindowUI(QtWidgets.QWidget):
         self.script_output_dock = QtWidgets.QDockWidget()
         self.script_output_dock.setWindowTitle("Output")
         self.script_output_dock.setWidget(self.script_output)
+        # self.script_output_dock.setAllowedAreas(QtCore.Qt.LeftDockWidgetArea | QtCore.Qt.RightDockWidgetArea)
+
+        self.script_tree = ScriptTree()
+        self.script_tree_dock = QtWidgets.QDockWidget()
+        self.script_tree_dock.setWindowTitle("Script Tree")
+        self.script_tree_dock.setWidget(self.script_tree)
+        # self.script_tree_dock.setAllowedAreas(QtCore.Qt.LeftDockWidgetArea | QtCore.Qt.RightDockWidgetArea)
 
 
 class LiveScriptEditorWindow(QtWidgets.QMainWindow):
@@ -387,17 +442,18 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
         self.script_docks = []
 
         self.ui = LiveScriptEditorWindowUI(self)
+        # self.add_script_tab(file_path=__file__)
+        self.add_script_tab()
+
         self.reset_layout()
 
+        self.setDockOptions(self.AnimatedDocks | self.AllowNestedDocks)
         self.setTabPosition(QtCore.Qt.BottomDockWidgetArea, QtWidgets.QTabWidget.TabPosition.North)
         self.setTabPosition(QtCore.Qt.TopDockWidgetArea, QtWidgets.QTabWidget.TabPosition.North)
         self.setTabPosition(QtCore.Qt.LeftDockWidgetArea, QtWidgets.QTabWidget.TabPosition.North)
         self.setTabPosition(QtCore.Qt.RightDockWidgetArea, QtWidgets.QTabWidget.TabPosition.North)
 
-        self.resize(700, 500)
-
-        # self.add_script_tab(file_path=__file__)
-        self.add_script_tab()
+        self.resize(900, 700)
 
         file_menu = self.menuBar().addMenu("File")
         file_menu.setTearOffEnabled(True)
@@ -411,11 +467,18 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
         edit_menu.addAction("Clear History", self.ui.script_output.clear, QtGui.QKeySequence("CTRL+SHIFT+D"))
         edit_menu.addAction("Reset Layout", self.reset_layout, QtGui.QKeySequence("F5"))
 
+        self.ui.script_tree.file_path_double_clicked.connect(self.open_script_path)
+
         # class properties
         self.interp = code.InteractiveInterpreter(globals())
 
     def reset_layout(self):
+        self.addDockWidget(QtCore.Qt.TopDockWidgetArea, self.ui.script_tree_dock)
         self.addDockWidget(QtCore.Qt.TopDockWidgetArea, self.ui.script_output_dock)
+        self.resizeDocks((self.ui.script_tree_dock, self.ui.script_output_dock), (30, 50), QtCore.Qt.Horizontal)
+
+    def open_script_path(self, path):
+        self.add_script_tab(path)
 
     def add_script_tab(self, file_path=None):
 
