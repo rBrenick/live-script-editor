@@ -107,6 +107,23 @@ class PythonObjectCompleter(QtWidgets.QCompleter):
         self.filter_text = filter_text
 
 
+class LineNumberArea(QtWidgets.QWidget):
+    """
+    line number implementation modified from
+    https://stackoverflow.com/a/40389314
+    """
+
+    def __init__(self, editor):
+        super().__init__(editor)
+        self.my_editor = editor
+
+    def sizeHint(self):
+        return QtCore.QSize(self.editor.line_number_area_width(), 0)
+
+    def paintEvent(self, event):
+        self.my_editor.line_number_area_paint_event(event)
+
+
 class PythonScriptTextEdit(QtWidgets.QPlainTextEdit):
     def __init__(self, parent=None):
         super(PythonScriptTextEdit, self).__init__(parent)
@@ -117,6 +134,79 @@ class PythonScriptTextEdit(QtWidgets.QPlainTextEdit):
         self.completer.insert_text.connect(self.insert_completion)
 
         self.filter_is_active = False
+
+        self.line_number_area = LineNumberArea(self)
+
+        self.blockCountChanged.connect(self.update_line_number_area_width)
+        self.updateRequest.connect(self.update_line_number_area)
+        self.cursorPositionChanged.connect(self.highlight_current_line)
+
+        self.update_line_number_area_width(0)
+
+    def line_number_area_width(self):
+        digits = 1
+        count = max(1, self.blockCount())
+        while count >= 10:
+            count /= 10
+            digits += 1
+        space = 3 + self.fontMetrics().width('9') * digits
+        return space
+
+    def update_line_number_area_width(self, _):
+        self.setViewportMargins(self.line_number_area_width() + 10, 0, 0, 0)
+
+    def update_line_number_area(self, rect, dy):
+        if dy:
+            self.line_number_area.scroll(0, dy)
+        else:
+            self.line_number_area.update(0, rect.y(), self.line_number_area.width(), rect.height())
+
+        if rect.contains(self.viewport().rect()):
+            self.update_line_number_area_width(0)
+
+    def resizeEvent(self, event):
+        super(PythonScriptTextEdit, self).resizeEvent(event)
+        cr = self.contentsRect()
+        self.line_number_area.setGeometry(
+            QtCore.QRect(cr.left(), cr.top(), self.line_number_area_width() + 10, cr.height()))
+
+    def line_number_area_paint_event(self, event):
+        my_painter = QtGui.QPainter(self.line_number_area)
+        my_painter.fillRect(event.rect(), QtGui.QColor("#262626"))
+
+        block = self.firstVisibleBlock()
+        block_number = block.blockNumber()
+        top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
+        bottom = top + self.blockBoundingRect(block).height()
+
+        # Just to make sure I use the right font
+        height = self.fontMetrics().height()
+        while block.isValid() and (top <= event.rect().bottom()):
+            if block.isVisible() and (bottom >= event.rect().top()):
+                number = str(block_number + 1)
+                my_painter.setPen(QtCore.Qt.lightGray)
+                my_painter.drawText(-7, top, self.line_number_area.width(), height, QtCore.Qt.AlignRight, number)
+
+            block = block.next()
+            top = bottom
+            bottom = top + self.blockBoundingRect(block).height()
+            block_number += 1
+
+    def highlight_current_line(self):
+        extra_selections = []
+
+        if not self.isReadOnly():
+            selection = QtWidgets.QTextEdit.ExtraSelection()
+
+            line_color = QtGui.QColor()
+            line_color.setAlpha(30)
+
+            selection.format.setBackground(line_color)
+            selection.format.setProperty(QtGui.QTextFormat.FullWidthSelection, True)
+            selection.cursor = self.textCursor()
+            selection.cursor.clearSelection()
+            extra_selections.append(selection)
+        self.setExtraSelections(extra_selections)
 
     def insert_completion(self, completion):
         tc = self.textCursor()
@@ -155,7 +245,90 @@ class PythonScriptTextEdit(QtWidgets.QPlainTextEdit):
                 self.completer.popup().hide()
 
         if key_event == key_list.Key_Tab:
-            tc.insertText("    ")
+            # Indent
+            pos = tc.selectionStart()
+
+            selected_text = tc.selection().toPlainText()
+
+            text_was_selected = len(selected_text)
+            if not text_was_selected:
+                pos = tc.position()
+                tc.select(tc.LineUnderCursor)
+                selected_text = tc.selectedText()
+
+            if len(selected_text):
+                new_lines = []
+                for line in selected_text.splitlines():
+                    new_lines.append(" " * 4 + line)
+                text_to_insert = "\n".join(new_lines)
+            else:
+                text_to_insert = " " * 4
+            tc.insertText(text_to_insert)
+
+            # select indented text
+            if text_was_selected:
+                tc.setPosition(pos)
+                tc.movePosition(tc.Right, tc.KeepAnchor, n=len(text_to_insert))
+                self.setTextCursor(tc)
+            return
+
+        if key_event == key_list.Key_Backtab:
+            # Un-indent
+            pos = tc.selectionStart()
+            selected_text = tc.selection().toPlainText()
+
+            text_was_selected = len(selected_text)
+            if not text_was_selected:
+                tc.select(tc.LineUnderCursor)
+                selected_text = tc.selectedText()
+
+            new_lines = []
+            for line in selected_text.splitlines():
+                line_indent = (len(line) - len(line.lstrip(' ')))
+                if line_indent <= 3:
+                    line = line.lstrip(' ')
+
+                if line_indent > 3:
+                    line = line[4:]
+
+                new_lines.append(line)
+            inserted_text = "\n".join(new_lines)
+            tc.insertText(inserted_text)
+
+            if text_was_selected:
+                # select un-indented tabs
+                tc.setPosition(pos)
+                tc.movePosition(tc.Right, tc.KeepAnchor, n=len(inserted_text))
+                self.setTextCursor(tc)
+            return
+
+        if key_event == key_list.Key_Return:
+            """
+            Handle indent on Enter
+            """
+            current_pos = tc.position()
+
+            # find current character before enter key was pressed
+            tc.movePosition(QtGui.QTextCursor.Left)
+            tc.movePosition(QtGui.QTextCursor.Right, QtGui.QTextCursor.KeepAnchor)
+            character_on_enter = tc.selectedText()
+
+            # count spaces on current line
+            tc.select(QtGui.QTextCursor.LineUnderCursor)
+            line_text = tc.selectedText()
+            indent_level = len(line_text) - len(line_text.lstrip(' '))
+
+            # reset to org cursor position
+            tc.setPosition(current_pos)
+
+            super(PythonScriptTextEdit, self).keyPressEvent(event)
+
+            leading_spaces = " " * indent_level
+            if character_on_enter == ":":  # if function was declared, add some more spaces
+                leading_spaces += "    "
+
+            tc.insertText(leading_spaces)
+
             return
 
         super(PythonScriptTextEdit, self).keyPressEvent(event)
