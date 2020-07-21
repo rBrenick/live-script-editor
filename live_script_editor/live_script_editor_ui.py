@@ -1,6 +1,10 @@
+import builtins
 import code
 import datetime
+import logging
 import os
+import re
+import subprocess
 import sys
 from contextlib import redirect_stdout, redirect_stderr
 from typing import Callable
@@ -9,13 +13,23 @@ from Qt import QtCore, QtWidgets, QtGui
 
 from live_script_editor import python_syntax_highlight
 
+logging.basicConfig(level=logging.INFO)
+log = logging.Logger(__name__)
+
 key_list = QtCore.Qt
 
-tool_qt_stylesheet = ""
-stylesheet_path = os.path.join(os.path.dirname(__file__), "stylesheets", "darkblue.stylesheet")
-if os.path.exists(stylesheet_path):
-    with open(stylesheet_path, "r") as fh:
-        tool_qt_stylesheet = fh.read()
+
+class LocalConstants:
+    obj_name_re = re.compile(r"[\w]+\.", re.IGNORECASE)
+
+    tool_qt_stylesheet = ""
+    stylesheet_path = os.path.join(os.path.dirname(__file__), "stylesheets", "darkblue.stylesheet")
+    if os.path.exists(stylesheet_path):
+        with open(stylesheet_path, "r") as fh:
+            tool_qt_stylesheet = fh.read()
+
+
+lk = LocalConstants
 
 
 class ScriptConsoleOutputUI(QtWidgets.QPlainTextEdit):
@@ -47,7 +61,7 @@ class ScriptConsoleOutputUI(QtWidgets.QPlainTextEdit):
         if fmt is not None:
             self.setCurrentCharFormat(fmt)
 
-        if len(line) != 1 or ord(line[0]) != 10:
+        if len(line) != 1 or ord(line[0]) != 10:  # ordinal 10 is Line feed or '\n'
             self.appendPlainText(line.rstrip())
         self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
 
@@ -58,7 +72,7 @@ class PythonObjectCompleter(QtWidgets.QCompleter):
     def __init__(self, parent=None):
         super(PythonObjectCompleter, self).__init__(["yeahh", "boiiii"], parent)  # if this shows up, that means trouble
 
-        self.popup().setStyleSheet(tool_qt_stylesheet)
+        self.popup().setStyleSheet(lk.tool_qt_stylesheet)
 
         self.last_selected = None
         self.setCompletionMode(QtWidgets.QCompleter.UnfilteredPopupCompletion)
@@ -88,7 +102,13 @@ class PythonObjectCompleter(QtWidgets.QCompleter):
         :param text:
         :return:
         """
-        selected_obj_full_name = text.split(" ")[-1].split("(")[-1]  # TODO: replace this with regex or something
+        found_obj_names = lk.obj_name_re.findall(text)  # strip ( and find everything after special characters
+        if not found_obj_names:
+            log.warning("regex failed on: {}".format(text))
+            return
+
+        selected_obj_full_name = "".join(found_obj_names)
+
         dot_split = selected_obj_full_name.split(".")
 
         selected_obj_base = dot_split[0]  # get first part before the .
@@ -106,6 +126,12 @@ class PythonObjectCompleter(QtWidgets.QCompleter):
     def set_filter(self, filter_text):
         self.filter_model.setFilterFixedString(filter_text)
         self.filter_text = filter_text
+
+    def reset_completion_list(self):
+        completion_list = []
+        completion_list.extend(globals())
+        completion_list.extend(dir(builtins))
+        self.item_model.setStringList(completion_list)
 
 
 class LineNumberArea(QtWidgets.QWidget):
@@ -398,18 +424,31 @@ class PythonScriptTextEdit(QtWidgets.QPlainTextEdit):
 
             return
 
-        if key_event == key_list.Key_Period:
-            popup = self.completer.popup()
-            tc.select(QtGui.QTextCursor.LineUnderCursor)
+        modifiers = QtWidgets.QApplication.keyboardModifiers()
+        ctrl_space_pressed = key_event == key_list.Key_Space and modifiers == QtCore.Qt.ControlModifier
 
-            self.completer.complete_text(tc.selectedText())
+        if key_event == key_list.Key_Period or ctrl_space_pressed:
+            popup = self.completer.popup()
+
+            tc.movePosition(QtGui.QTextCursor.Left)
+            tc.movePosition(QtGui.QTextCursor.Right, QtGui.QTextCursor.KeepAnchor)
+            last_character = tc.selectedText()
+
+            tc.select(QtGui.QTextCursor.LineUnderCursor)
+            current_line_text = tc.selectedText()
+
             self.completer.set_filter("")
+            if last_character == "." and current_line_text:
+                self.completer.complete_text(current_line_text)
+            else:
+                self.completer.reset_completion_list()
+                if current_line_text:
+                    self.completer.set_filter(current_line_text)
 
             popup.setCurrentIndex(self.completer.completionModel().index(0, 0))
 
             cr = self.cursorRect()
-            cr.setWidth(self.completer.popup().sizeHintForColumn(
-                0) + self.completer.popup().verticalScrollBar().sizeHint().width())
+            cr.setWidth(popup.sizeHintForColumn(0) + popup.verticalScrollBar().sizeHint().width())
             self.completer.complete(cr)
 
 
@@ -440,9 +479,34 @@ class ScriptTree(QtWidgets.QWidget):
 
         self.set_folder_path(os.path.dirname(__file__))
 
+        self.tree_view.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.tree_view.customContextMenuRequested.connect(self.context_menu)
         self.tree_view.doubleClicked.connect(self._path_double_clicked)
 
         self.setLayout(main_layout)
+
+    def context_menu(self, position):
+        actions = list()
+        # actions.append({"Run Script": self.run_script})
+        actions.append({"Show in Explorer": self.open_path_in_explorer})
+        # actions.append({"Open Backup Folder": self.open_backup_folder})
+
+        menu = self.build_context_menu(actions)
+        menu.exec_(self.tree_view.viewport().mapToGlobal(position))
+
+    def build_context_menu(self, actions):
+        menu = QtWidgets.QMenu(self)
+        for action in actions:
+            if action == "-":
+                menu.addSeparator()
+            else:
+                for text, method in action.items():
+                    action = QtWidgets.QAction(self)
+                    action.setText(text)
+                    action.triggered.connect(method)
+                    menu.addAction(action)
+
+        return menu
 
     def set_folder_path(self, folder_path):
         self.folder_path_line_edit.setText(folder_path)
@@ -455,10 +519,35 @@ class ScriptTree(QtWidgets.QWidget):
             self.set_folder_path(p)
 
     def _path_double_clicked(self, index):
-        self.file_path_double_clicked.emit(self.get_file_path_from_index(index))
+        path = self.get_file_path_from_index(index)
+        if os.path.isfile(path):
+            self.file_path_double_clicked.emit(path)
 
     def get_file_path_from_index(self, index):
         return self.file_model.filePath(index).replace("\\", "/")
+
+    def get_current_selected_file_path(self):
+        index = self.tree_view.currentIndex()
+        return self.get_file_path_from_index(index)
+
+    def open_path_in_explorer(self, file_path=None):
+        if not file_path:
+            file_path = self.get_current_selected_file_path()
+
+        if os.path.isdir(file_path):
+            file_path += "/"
+
+        file_path = file_path.replace("/", "\\")  # wow, I don't think I've done this intentionally before
+
+        try:
+            if os.path.isdir(file_path):
+                os.startfile(file_path)  # this felt faster than subprocess on my machine
+            else:
+                subprocess.Popen(r'explorer /select, "{}"'.format(file_path))
+                log.info("you did it")
+                log.warning("Attempt to open path in explorer failed")
+        except Exception as e:
+            log.warning("Attempt to open path in explorer failed")
 
 
 class LiveScriptEditorWindowUI(QtWidgets.QWidget):
@@ -488,7 +577,7 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
         super(LiveScriptEditorWindow, self).__init__(parent)
         self.setWindowTitle("Live Script Editor")
         self.setWindowIcon(QtGui.QIcon(os.path.join(os.path.dirname(__file__), "icons", "live_script_editor_icon.png")))
-        self.setStyleSheet(tool_qt_stylesheet)
+        self.setStyleSheet(lk.tool_qt_stylesheet)
 
         self.script_docks = list()
         self.recently_closed_scripts = list()
@@ -558,6 +647,7 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
             script_text_edit.load_script(file_path)
             self.show_message("Opened: {}".format(file_path))
         else:
+            script_text_edit.script_name = "Python"
             script_text_edit.set_dock_tab_name("Python")
 
         # dock to existing script tab, or make new at the bottom
@@ -586,9 +676,10 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
                 docks_in_focus.append(dock)
                 self.script_docks.remove(dock)
                 self.recently_closed_scripts.append(dock_widget.script_file_path)
-                self.show_message("Closed: {}".format(dock_widget.script_file_path))
+                self.show_message("Closed: {}".format(dock_widget.script_name))
 
         [d.close() for d in docks_in_focus]
+        [d.deleteLater() for d in docks_in_focus]
 
         if len(self.script_docks):
             self.script_docks[-1].widget().setFocus(QtCore.Qt.FocusReason.ActiveWindowFocusReason)
@@ -596,22 +687,22 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
     def save_current_tab(self):
         active_script = self.get_active_script_text_edit()  # type: PythonScriptTextEdit
         if active_script.save_script():
-            self.show_message("Script Saved: {}".format(active_script.script_file_path))
+            self.show_message("Script Saved: {}".format(active_script.script_name))
 
     def save_current_tab_as(self):
         active_script = self.get_active_script_text_edit()  # type: PythonScriptTextEdit
         if active_script.save_script(save_as=True):
-            self.show_message("Script Saved: {}".format(active_script.script_file_path))
+            self.show_message("Script Saved: {}".format(active_script.script_name))
 
     def open_script(self):
         active_script = self.get_active_script_text_edit()  # type: PythonScriptTextEdit
         if active_script.load_script(open_dialog=True):
-            self.show_message("Script Opened: {}".format(active_script.script_file_path))
+            self.show_message("Script Opened: {}".format(active_script.script_name))
 
     def reload_script(self):
         active_script = self.get_active_script_text_edit()  # type: PythonScriptTextEdit
         if active_script.load_script():
-            self.show_message("Script Reloaded: {}".format(active_script.script_file_path))
+            self.show_message("Script Reloaded: {}".format(active_script.script_name))
 
     def reopen_recently_closed(self):
         if not len(self.recently_closed_scripts):
@@ -642,6 +733,7 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
             self.interp.runcode(python_script_text)  # runsource fails on multi-line
         else:
             self.interp.runsource(python_script_text)  # shows results of single line commands
+        self.show_message("Executed: {}".format(active_script.script_name))
 
 
 class Redirect(object):
