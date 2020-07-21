@@ -1,4 +1,5 @@
 import code
+import datetime
 import os
 import sys
 from contextlib import redirect_stdout, redirect_stderr
@@ -125,24 +126,74 @@ class LineNumberArea(QtWidgets.QWidget):
 
 
 class PythonScriptTextEdit(QtWidgets.QPlainTextEdit):
-    def __init__(self, parent=None):
+    def __init__(self, file_path="", parent=None):
         super(PythonScriptTextEdit, self).__init__(parent)
+
+        self.dock_widget = None  # type: QtWidget.QDockWidget
+        self.script_file_path = file_path
+        self.script_name = os.path.basename(file_path) if file_path else "UNDEFINED"
 
         self.completer = PythonObjectCompleter()
         self.completer.setWidget(self)
         self.completer.setMaxVisibleItems(20)
         self.completer.insert_text.connect(self.insert_completion)
 
-        self.filter_is_active = False
-
         self.line_number_area = LineNumberArea(self)
 
         self.blockCountChanged.connect(self.update_line_number_area_width)
         self.updateRequest.connect(self.update_line_number_area)
         self.cursorPositionChanged.connect(self.highlight_current_line)
+        self.textChanged.connect(self.mark_unsaved_changes)
 
         self.update_line_number_area_width(0)
 
+    # -------------------------------------------
+    # Functionality
+    def save_script(self, save_as=False):
+
+        file_path = self.script_file_path
+        if save_as or not file_path:
+            file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "save file", filter="*.py")
+            if not file_path:
+                return
+
+        with open(file_path, "w") as fp:
+            fp.write(self.toPlainText())
+
+        self.set_active_script_path(file_path)
+        return True
+
+    def load_script(self, file_path=None, open_dialog=False):
+        if file_path is None or open_dialog:
+            file_path = self.script_file_path
+            if file_path is None or open_dialog:
+                file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "open file", filter="*.py")
+                if file_path is None:
+                    return
+
+        with open(file_path, "r") as fp:
+            self.setPlainText(fp.read())
+
+        self.set_active_script_path(file_path)
+        return True
+
+    def set_active_script_path(self, file_path):
+        script_name = os.path.basename(file_path)
+        self.set_dock_tab_name(script_name)
+        self.script_file_path = file_path
+        self.script_name = script_name
+
+    def mark_unsaved_changes(self):
+        tab_name = self.dock_widget.windowTitle()
+        if not tab_name.endswith("*"):
+            tab_name = "{}*".format(tab_name)
+        self.set_dock_tab_name(tab_name)
+
+    def set_dock_tab_name(self, name):
+        self.dock_widget.setWindowTitle(name)
+
+    # -------------------------------------------------------------------
+    # UI things
     def line_number_area_width(self):
         digits = 1
         count = max(1, self.blockCount())
@@ -439,7 +490,8 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
         self.setWindowIcon(QtGui.QIcon(os.path.join(os.path.dirname(__file__), "icons", "live_script_editor_icon.png")))
         self.setStyleSheet(tool_qt_stylesheet)
 
-        self.script_docks = []
+        self.script_docks = list()
+        self.recently_closed_scripts = list()
 
         self.ui = LiveScriptEditorWindowUI(self)
         # self.add_script_tab(file_path=__file__)
@@ -458,7 +510,13 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
         file_menu = self.menuBar().addMenu("File")
         file_menu.setTearOffEnabled(True)
         file_menu.addAction("New Tab", self.add_script_tab, QtGui.QKeySequence("CTRL+N"))
-        file_menu.addAction("Close Tab", self.close_current_tab, QtGui.QKeySequence("CTRL+W"))
+        file_menu.addAction("Open Script...", self.open_script, QtGui.QKeySequence("CTRL+O"))
+        file_menu.addAction("Save Script", self.save_current_tab, QtGui.QKeySequence("CTRL+S"))
+        file_menu.addAction("Save Script As...", self.save_current_tab_as, QtGui.QKeySequence("CTRL+SHIFT+S"))
+        file_menu.addSeparator()
+        file_menu.addAction("Re-Open Recent Script", self.reopen_recently_closed, QtGui.QKeySequence("CTRL+SHIFT+T"))
+        file_menu.addAction("Reload Script", self.reload_script, QtGui.QKeySequence("CTRL+R"))
+        file_menu.addAction("Close Script", self.close_current_tab, QtGui.QKeySequence("CTRL+W"))
         file_menu.addSeparator()
         file_menu.addAction("Run Script", self.run_script, QtGui.QKeySequence("CTRL+RETURN"))
 
@@ -471,6 +529,7 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
 
         # class properties
         self.interp = code.InteractiveInterpreter(globals())
+        self.show_message("Ready")
 
     def reset_layout(self):
         self.addDockWidget(QtCore.Qt.TopDockWidgetArea, self.ui.script_tree_dock)
@@ -483,7 +542,7 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
     def add_script_tab(self, file_path=None):
 
         # custom QT widget for ScriptEditing
-        script_text_edit = PythonScriptTextEdit()
+        script_text_edit = PythonScriptTextEdit(file_path=file_path)
         script_text_edit.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
         script_text_edit.setWordWrapMode(QtGui.QTextOption.NoWrap)
 
@@ -493,18 +552,13 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
         # Dock Widget for ScriptTab
         script_tabs_dock = QtWidgets.QDockWidget()
         script_tabs_dock.setWidget(script_text_edit)
+        script_text_edit.dock_widget = script_tabs_dock  # not very safe
 
-        # if file input, add file content to text edit
-        if file_path and os.path.isfile(file_path):
-            script_tabs_dock.setWindowTitle(os.path.basename(file_path))
-            with open(file_path, "r") as fp:
-                script_text = fp.read()
+        if file_path:
+            script_text_edit.load_script(file_path)
+            self.show_message("Opened: {}".format(file_path))
         else:
-            script_tabs_dock.setWindowTitle("Python")
-            # script_text = python_syntax_highlight.highlight_debug_str
-            script_text = ""
-
-        script_text_edit.setPlainText(script_text)
+            script_text_edit.set_dock_tab_name("Python")
 
         # dock to existing script tab, or make new at the bottom
         if self.script_docks:
@@ -527,14 +581,48 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
     def close_current_tab(self):
         docks_in_focus = []
         for dock in self.script_docks:  # type: QtWidgets.QDockWidget
-            if dock.widget().hasFocus():
+            dock_widget = dock.widget()  # type: PythonScriptTextEdit
+            if dock_widget.hasFocus():
                 docks_in_focus.append(dock)
                 self.script_docks.remove(dock)
+                self.recently_closed_scripts.append(dock_widget.script_file_path)
+                self.show_message("Closed: {}".format(dock_widget.script_file_path))
 
         [d.close() for d in docks_in_focus]
 
         if len(self.script_docks):
             self.script_docks[-1].widget().setFocus(QtCore.Qt.FocusReason.ActiveWindowFocusReason)
+
+    def save_current_tab(self):
+        active_script = self.get_active_script_text_edit()  # type: PythonScriptTextEdit
+        if active_script.save_script():
+            self.show_message("Script Saved: {}".format(active_script.script_file_path))
+
+    def save_current_tab_as(self):
+        active_script = self.get_active_script_text_edit()  # type: PythonScriptTextEdit
+        if active_script.save_script(save_as=True):
+            self.show_message("Script Saved: {}".format(active_script.script_file_path))
+
+    def open_script(self):
+        active_script = self.get_active_script_text_edit()  # type: PythonScriptTextEdit
+        if active_script.load_script(open_dialog=True):
+            self.show_message("Script Opened: {}".format(active_script.script_file_path))
+
+    def reload_script(self):
+        active_script = self.get_active_script_text_edit()  # type: PythonScriptTextEdit
+        if active_script.load_script():
+            self.show_message("Script Reloaded: {}".format(active_script.script_file_path))
+
+    def reopen_recently_closed(self):
+        if not len(self.recently_closed_scripts):
+            self.show_message("No recent scripts found")
+            return
+        recent_script_path = self.recently_closed_scripts.pop(-1)
+        self.add_script_tab(recent_script_path)
+
+    def show_message(self, text):
+        current_time = datetime.datetime.now().strftime("%H:%M:%S")
+        self.statusBar().showMessage("{} - {}".format(current_time, text))
 
     def run_script(self):
         active_script = self.get_active_script_text_edit()  # type: PythonScriptTextEdit
