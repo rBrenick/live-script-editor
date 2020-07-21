@@ -28,8 +28,23 @@ class LocalConstants:
         with open(stylesheet_path, "r") as fh:
             tool_qt_stylesheet = fh.read()
 
+            # setting keys
+
 
 lk = LocalConstants
+
+
+class ScriptEditorSettings(QtCore.QSettings):
+    k_window_layout = "window/layout"
+    k_folder_path = "script_tree/folder_path"
+
+    def __init__(self):
+        super(ScriptEditorSettings, self).__init__(
+            QtCore.QSettings.IniFormat,
+            QtCore.QSettings.UserScope,
+            'LiveScriptEditor',
+            'live_script_editor'  # saves in C:\Users\Richa\AppData\Roaming\LiveScriptEditor
+        )
 
 
 class ScriptConsoleOutputUI(QtWidgets.QPlainTextEdit):
@@ -457,6 +472,9 @@ class ScriptTree(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super(ScriptTree, self).__init__(parent)
+
+        self._settings = ScriptEditorSettings()
+
         main_layout = QtWidgets.QVBoxLayout()
 
         self.file_model = QtWidgets.QFileSystemModel()
@@ -477,7 +495,10 @@ class ScriptTree(QtWidgets.QWidget):
             self.tree_view.header().hideSection(i)
         main_layout.addWidget(self.tree_view)
 
-        self.set_folder_path(os.path.dirname(__file__))
+        folder_path = self._settings.value(ScriptEditorSettings.k_folder_path)
+        if folder_path is None:
+            folder_path = os.path.dirname(__file__)
+        self.set_folder_path(folder_path)
 
         self.tree_view.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.tree_view.customContextMenuRequested.connect(self.context_menu)
@@ -512,6 +533,7 @@ class ScriptTree(QtWidgets.QWidget):
         self.folder_path_line_edit.setText(folder_path)
         self.file_model.setRootPath(folder_path)
         self.tree_view.setRootIndex(self.file_model.index(folder_path))
+        self._settings.setValue(ScriptEditorSettings.k_folder_path, folder_path)
 
     def browse_folder_path(self):
         p = QtWidgets.QFileDialog.getExistingDirectory(self, "Get Script Folder")
@@ -579,6 +601,8 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
         self.setWindowIcon(QtGui.QIcon(os.path.join(os.path.dirname(__file__), "icons", "live_script_editor_icon.png")))
         self.setStyleSheet(lk.tool_qt_stylesheet)
 
+        self._settings = ScriptEditorSettings()
+
         self.script_docks = list()
         self.recently_closed_scripts = list()
 
@@ -589,12 +613,17 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
         self.reset_layout()
 
         self.setDockOptions(self.AnimatedDocks | self.AllowNestedDocks)
-        self.setTabPosition(QtCore.Qt.BottomDockWidgetArea, QtWidgets.QTabWidget.TabPosition.North)
-        self.setTabPosition(QtCore.Qt.TopDockWidgetArea, QtWidgets.QTabWidget.TabPosition.North)
-        self.setTabPosition(QtCore.Qt.LeftDockWidgetArea, QtWidgets.QTabWidget.TabPosition.North)
-        self.setTabPosition(QtCore.Qt.RightDockWidgetArea, QtWidgets.QTabWidget.TabPosition.North)
+        self.setTabPosition(QtCore.Qt.AllDockWidgetAreas, QtWidgets.QTabWidget.TabPosition.North)
 
         self.resize(900, 700)
+
+        """
+        try:
+            self.restoreGeometry(self._settings.value("geometry"))
+            self.restoreState(self._settings.value("windowState"))
+        except AttributeError as e:
+            print(e)
+        """
 
         file_menu = self.menuBar().addMenu("File")
         file_menu.setTearOffEnabled(True)
@@ -619,6 +648,15 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
         # class properties
         self.interp = code.InteractiveInterpreter(globals())
         self.show_message("Ready")
+
+    """
+    def closeEvent(self, event):
+        # from https://stackoverflow.com/a/39092887
+        # doesn't seem to restore properly for some reason
+        self._settings.setValue('geometry', self.saveGeometry())
+        self._settings.setValue('windowState', self.saveState())
+        super(LiveScriptEditorWindow, self).closeEvent(event)
+    """
 
     def reset_layout(self):
         self.addDockWidget(QtCore.Qt.TopDockWidgetArea, self.ui.script_tree_dock)
