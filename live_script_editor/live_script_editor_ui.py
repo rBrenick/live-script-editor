@@ -190,11 +190,11 @@ class PythonScriptTextEdit(QtWidgets.QPlainTextEdit):
 
     # -------------------------------------------
     # Functionality
-    def save_script(self, save_as=False):
+    def save_script(self, save_as=False, start_dir=None):
 
         file_path = self.script_file_path
         if save_as or not file_path:
-            file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "save file", filter="*.py")
+            file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, dir=start_dir, filter="*.py")
             if not file_path:
                 return
 
@@ -204,12 +204,12 @@ class PythonScriptTextEdit(QtWidgets.QPlainTextEdit):
         self.set_active_script_path(file_path)
         return True
 
-    def load_script(self, file_path=None, open_dialog=False):
+    def load_script(self, file_path=None, open_dialog=False, start_dir=None):
         if file_path is None or open_dialog:
             file_path = self.script_file_path
             if file_path is None or open_dialog:
-                file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "open file", filter="*.py")
-                if file_path is None:
+                file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, dir=start_dir, filter="*.py")
+                if not file_path:
                     return
 
         with open(file_path, "r") as fp:
@@ -476,6 +476,8 @@ class ScriptTree(QtWidgets.QWidget):
         self._settings = ScriptEditorSettings()
 
         main_layout = QtWidgets.QVBoxLayout()
+        main_layout.setContentsMargins(4, 4, 4, 4)
+        main_layout.setSpacing(2)
 
         self.file_model = QtWidgets.QFileSystemModel()
 
@@ -534,6 +536,9 @@ class ScriptTree(QtWidgets.QWidget):
         self.file_model.setRootPath(folder_path)
         self.tree_view.setRootIndex(self.file_model.index(folder_path))
         self._settings.setValue(ScriptEditorSettings.k_folder_path, folder_path)
+
+    def get_folder_path(self):
+        return self.folder_path_line_edit.text()
 
     def browse_folder_path(self):
         p = QtWidgets.QFileDialog.getExistingDirectory(self, "Get Script Folder")
@@ -703,6 +708,8 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
     def get_active_script_text_edit(self):
         for dock in self.script_docks:  # type: QtWidgets.QDockWidget
             if dock.widget().hasFocus():
+                if dock.visibleRegion().isEmpty():  # if it's not visible, don't return it
+                    continue
                 return dock.widget()
         return self.script_docks[-1].widget()  # nothing has focus, return last created
 
@@ -711,6 +718,8 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
         for dock in self.script_docks:  # type: QtWidgets.QDockWidget
             dock_widget = dock.widget()  # type: PythonScriptTextEdit
             if dock_widget.hasFocus():
+                if dock.visibleRegion().isEmpty():  # if it's not visible, don't close it
+                    continue
                 docks_in_focus.append(dock)
                 self.script_docks.remove(dock)
                 self.recently_closed_scripts.append(dock_widget.script_file_path)
@@ -724,23 +733,23 @@ class LiveScriptEditorWindow(QtWidgets.QMainWindow):
 
     def save_current_tab(self):
         active_script = self.get_active_script_text_edit()  # type: PythonScriptTextEdit
-        if active_script.save_script():
-            self.show_message("Script Saved: {}".format(active_script.script_name))
+        if active_script.save_script(start_dir=self.ui.script_tree.get_folder_path()):
+            self.show_message("Saved: {}".format(active_script.script_name))
 
     def save_current_tab_as(self):
         active_script = self.get_active_script_text_edit()  # type: PythonScriptTextEdit
-        if active_script.save_script(save_as=True):
-            self.show_message("Script Saved: {}".format(active_script.script_name))
+        if active_script.save_script(save_as=True, start_dir=self.ui.script_tree.get_folder_path()):
+            self.show_message("Saved: {}".format(active_script.script_name))
 
     def open_script(self):
         active_script = self.get_active_script_text_edit()  # type: PythonScriptTextEdit
-        if active_script.load_script(open_dialog=True):
-            self.show_message("Script Opened: {}".format(active_script.script_name))
+        if active_script.load_script(open_dialog=True, start_dir=self.ui.script_tree.get_folder_path()):
+            self.show_message("Opened: {}".format(active_script.script_name))
 
     def reload_script(self):
         active_script = self.get_active_script_text_edit()  # type: PythonScriptTextEdit
-        if active_script.load_script():
-            self.show_message("Script Reloaded: {}".format(active_script.script_name))
+        if active_script.load_script(start_dir=self.ui.script_tree.get_folder_path()):
+            self.show_message("Reloaded: {}".format(active_script.script_name))
 
     def reopen_recently_closed(self):
         if not len(self.recently_closed_scripts):
