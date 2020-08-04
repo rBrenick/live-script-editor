@@ -34,6 +34,9 @@ class LocalConstants:
 lk = LocalConstants
 
 
+# orig_displayhook = sys.displayhook
+# sys.displayhook = lambda x: exec(['_=x; pprint(x)','pass'][x is None])
+
 class ScriptEditorSettings(QtCore.QSettings):
     k_window_layout = "window/layout"
     k_folder_path = "script_tree/folder_path"
@@ -170,7 +173,7 @@ class PythonScriptTextEdit(QtWidgets.QPlainTextEdit):
     def __init__(self, file_path="", parent=None):
         super(PythonScriptTextEdit, self).__init__(parent)
 
-        self.dock_widget = None  # type: QtWidget.QDockWidget
+        self.dock_widget = None  # type: QtWidgets.QDockWidget
         self.script_file_path = file_path
         self.script_name = os.path.basename(file_path) if file_path else "UNDEFINED"
 
