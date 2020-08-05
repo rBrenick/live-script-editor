@@ -800,18 +800,35 @@ class Redirect(object):
 
 
 def main():
-    arg_dialog = LiveScriptEditorWindow()
-    return arg_dialog
+    """
+    Messy logic to deal with running from active QApplication instance of DCC
+
+    :return:
+    """
+    existing_app = QtWidgets.QApplication.instance()
+    if not existing_app:
+        app = QtWidgets.QApplication(sys.argv)
+
+    window = LiveScriptEditorWindow()
+
+    if len(sys.argv) > 1:
+        script_path = os.path.abspath(sys.argv[1])
+        if os.path.exists(script_path):
+            window.open_script_path(script_path)
+
+    if existing_app:
+        window.show()
+
+    else:
+        # This might be tricky to replicate in DCC
+        # It looks like the app.exec_() needs to be part of the 'with'
+        error_redirect = Redirect(window.ui.script_output.write_error)
+        with redirect_stdout(window.ui.script_output), redirect_stderr(error_redirect):
+            window.show()
+            sys.exit(app.exec_())
+
+    return window
 
 
 if __name__ == '__main__':
-    app = QtWidgets.QApplication(sys.argv)
-
-    dialog = main()
-    redirect = Redirect(dialog.ui.script_output.write_error)
-
-    # This might be tricky to replicate in DCC
-    # It looks like the app.exec_() needs to be part of the 'with'
-    with redirect_stdout(dialog.ui.script_output), redirect_stderr(redirect):
-        dialog.show()
-        sys.exit(app.exec_())
+    main()
