@@ -13,10 +13,14 @@ pip install git+https://github.com/rBrenick/live-script-editor
 # Run
 <pre>
 
-from command line:
+-------------------------------------------------------
+# from command line:
+
 livescripter (with optional .py file as script to open)
 
-from DCC:
+-------------------------------------------------------
+
+# from DCC:
 import live_script_editor
 live_script_editor.main()
 
